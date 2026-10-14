@@ -132,6 +132,7 @@ The application is a classic Electron app with two processes:
 - Persistent settings (Storage)
 - Dialogs (Native or Zenity backends)
 - MCP server for AI assistant integration (McpServer)
+- The local helper figma.com probes from a browser so file links open here (FigmaAgent)
 
 **Renderer Process** (`src/renderer/`) - Browser frontend with two Svelte apps:
 - **Panel** (`src/renderer/Panel/`) - Top toolbar UI with tabs
@@ -219,6 +220,19 @@ new App(new WindowManager(), new Session(), new FontManager());
 - MCP protocol (JSON-RPC 2.0 over Streamable HTTP) on port **3845**
 - Exposes Figma design context to AI assistants via `webContents.executeJavaScript()`
 - Started in `App.ready()`
+
+**FigmaAgent** (`src/main/FigmaAgent.ts`):
+- The local helper figma.com looks for from a *browser*. The page never uses `figma://` for
+  "Open in desktop app": it probes `http://127.0.0.1:44950/figma/...` (the official app's font
+  helper) and, if it answers, shows the menu item, the "Open links in desktop app" preference and
+  redirects file links on load. Its platform check includes Linux. Endpoints answered: `/version`
+  (`{version}`, ≥ 24 or the page skips the preference push), `/desktop/can-open-url`
+  (`{canOpen}`), `/desktop/open-url` (`{opened}`, routed to `WindowManager.openUrl`), and the
+  preference POST. Everything else 404s. Requests without a figma.com `Origin` get 403 — the
+  open-url GET is a simple request any page could fire — and only https figma.com URLs for a
+  signed-in user id (`WindowManager.getKnownUserIds`) are opened. Protocol read out of the
+  production bundle on 2026-10-11 (`routeAgentRequest` is pure and unit-tested). Setting:
+  `app.figmaAgentEnabled` (default on); the port is fixed by Figma's page.
 
 **UrlHandlerIntegration** (`src/main/UrlHandlerIntegration.ts`):
 - Makes sure `figma://` reaches the app when no package registered it: an AppImage always writes/refreshes its own `.desktop` (path may move); a bare binary (`nix run`, unpacked zip) writes a "local" entry only if `xdg-mime` reports no handler at all. Flatpak and dev are skipped. Rules live in the pure `planUrlHandler()` (unit-tested)
@@ -368,6 +382,7 @@ Custom switches can be added in settings under `app.commandSwitches`.
 | `src/main/Dialogs/index.ts` | Dialog provider (Native / Zenity) |
 | `src/main/MCP/McpServer.ts` | MCP protocol server (port 3845) |
 | `src/main/UrlHandlerIntegration.ts` | figma:// handler registration for AppImage / bare-binary launches |
+| `src/main/FigmaAgent.ts` | Local helper figma.com probes from a browser (port 44950) so browser links open in the app |
 | `src/main/ExtensionManager.ts` | Plugin system with hot-reloading |
 | `src/renderer/Panel/App.svelte` | Main toolbar UI |
 | `src/renderer/Panel/ipc.svelte.ts` | Panel IPC listener registrations |
@@ -474,7 +489,7 @@ Tag push (`v*.*.*`) triggers `release.yml` which runs these jobs **in sequence**
 1. **`build-x64`** — builds deb, rpm, AppImage, zip on Ubuntu (electron-builder bundles Electron)
 2. **`build-arm64`** — same formats on native ARM runner
 3. **`build-pacman`** — builds `.pacman` in Arch container (electron-builder bundles Electron)
-4. **`build-flatpak`** — builds a `.flatpak` bundle from `flatpak/app.borys.FigmaLinuxNext.yml` in the `bilelmoussaoui/flatpak-github-actions:freedesktop-24.08` container. x64 only (the manifest hardcodes the x64 Electron zip), and `continue-on-error: true` — a Flatpak failure costs the release its `.flatpak` and nothing else. Note this builds the manifest's `tag:`, so `sync_flatpak_release.py` keeping that tag current is what makes the bundle match the release.
+4. **`build-flatpak`** — builds a `.flatpak` bundle from `flatpak/app.borys.FigmaLinuxNext.yml` in the `ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08` container. x64 only (the manifest hardcodes the x64 Electron zip), and `continue-on-error: true` — a Flatpak failure costs the release its `.flatpak` and nothing else. Note this builds the manifest's `tag:`, so `sync_flatpak_release.py` keeping that tag current is what makes the bundle match the release.
 5. **`release`** — collects all artifacts, computes SHA256SUMS, creates GitHub Release via `softprops/action-gh-release`. The Flatpak download step is `continue-on-error` since the artifact may not exist.
 6. **`aur`** — clones `ssh://aur@aur.archlinux.org/figma-linux-next.git`, updates `pkgver` + SHA256 in PKGBUILD, generates `.SRCINFO`, pushes to AUR
 7. **`aur-bin`** — same for `figma-linux-next-bin` (hashes the release zip instead of the tarball)
